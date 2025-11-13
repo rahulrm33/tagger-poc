@@ -155,6 +155,40 @@ The AWS Auto-Tagger is an event-driven, serverless solution that automatically a
 - Error handling and retry logic
 - Response formatting with metrics
 
+## Scalability Considerations
+
+### Throughput
+
+- **Lambda Concurrency**: 1,000 concurrent executions (AWS default)
+- **Batch Processing**: Multiple CloudTrail events processed per log file
+- **Multi-Region**: Single Lambda handles resources in ALL regions
+- **Processing Delay**: 5-15 minutes (CloudTrail log delivery time)
+
+### Performance Optimizations
+
+1. **Batch Processing**: Process all events in a CloudTrail log file at once
+2. **Client Reuse**: Boto3 clients cached and reused for multiple resources
+3. **Multi-Region Efficiency**: No need to deploy Lambda to each region
+4. **Connection Pooling**: Boto3 manages HTTP connections
+5. **Memory Allocation**: 512MB for faster S3 downloads and processing
+
+### Cost Optimization
+
+**Estimated Monthly Cost (for 100K resource creations)**:
+1. **Lambda**: ~$3-5
+   - Invocations: Based on CloudTrail log files created (~1K-5K/month)
+   - Duration: 512MB @ 5-10 seconds average
+2. **CloudTrail**: ~$2.00 per 100,000 events
+3. **S3 Storage**: ~$0.50 (log files, compressed)
+4. **Data Transfer**: Minimal (within AWS)
+
+**Total**: ~$5-8/month for typical workload
+
+**Recommendations**:
+   - Single Lambda deployment (vs multiple per region)
+   - CloudTrail log lifecycle policies (archive to Glacier after 30 days)
+   - Monitor Lambda duration and optimize if needed
+
 ### Backup and Recovery
 
 1. **Configuration Backup**
