@@ -1,8 +1,8 @@
 # AWS Auto-Tagger: Automatic Resource Tagging by Creator ARN
 
-A production-ready Python solution that **automatically tags AWS resources with the user ARN** who created them.
+**Automatically tags AWS resources with the user ARN who created them using CloudTrail, S3, and Lambda.**
 
-## 🎯 Problem
+## 🎯 Problem Statement
 
 Organizations struggle with:
 - ❌ Cost allocation - Who's spending what?
@@ -12,52 +12,35 @@ Organizations struggle with:
 
 ## ✅ Solution
 
-Automatic tagging via CloudTrail + EventBridge + Lambda:
-- ✅ Real-time detection of resource creation
-- ✅ Automatic user ARN extraction
-- ✅ Zero manual tagging required
-- ✅ Full audit trail in CloudWatch
-- ✅ Works with 7+ AWS services
+Serverless auto-tagging via CloudTrail + S3 + Lambda:
+- ✅ **Multi-region support** - ONE Lambda handles ALL regions
+- ✅ **Automatic tagging** - No manual intervention required
+- ✅ **Audit trail** - Full logging in CloudWatch
+- ✅ **7+ AWS services** - EC2, S3, RDS, Lambda, DynamoDB, SNS, SQS
 
 ## 🚀 Quick Start
 
-### 1. Enable CloudTrail
+### 1. Deploy the Solution 🌍
 
-```bash
-# Create S3 bucket
-BUCKET_NAME="cloudtrail-logs-$(date +%s)"
-aws s3 mb s3://${BUCKET_NAME}
-
-# Attach policy
-aws s3api put-bucket-policy \
-  --bucket ${BUCKET_NAME} \
-  --policy file://iam/cloudtrail_policy.json
-
-# Create trail
-aws cloudtrail create-trail \
-  --name auto-tagger-trail \
-  --s3-bucket-name ${BUCKET_NAME} \
-  --is-multi-region-trail
-
-# Start logging
-aws cloudtrail start-logging --trail-name auto-tagger-trail
-```
-
-### 2. Deploy Solution
+**ONE Lambda in ONE region handles ALL regions!**
 
 ```bash
 cd deployment
-AWS_PROFILE=your-profile AWS_REGION=your-region bash deploy.sh
+
+# ONE deployment for ALL regions!
+export AWS_REGION=us-east-1
+./deploy.sh
 ```
 
-### 3. Test It
+### 2. Test It
 
 ```bash
-# Create EC2 instance
-aws ec2 run-instances --image-id ami-0c55b159cbfafe1f0 --instance-type t3.micro
+# Create EC2 instance in ANY region
+aws ec2 run-instances --image-id ami-0c55b159cbfafe1f0 --instance-type t3.micro --region us-west-2
 
-# Wait 30 seconds, then check tags
-aws ec2 describe-tags --filters "Name=resource-id,Values=i-xxxxx"
+# Wait 5-10 minutes for CloudTrail logs to be delivered
+# Then check tags
+aws ec2 describe-tags --filters "Name=resource-id,Values=i-xxxxx" --region us-west-2
 
 # You'll see tags: CreatedBy, CreatedDate, ManagedBy, etc.
 ```
@@ -67,45 +50,48 @@ aws ec2 describe-tags --filters "Name=resource-id,Values=i-xxxxx"
 | Feature | Details |
 |---------|---------|
 | **Supported Services** | EC2, S3, RDS, Lambda, DynamoDB, SNS, SQS |
-| **Response Time** | Tagged within 30-60 seconds |
-| **Throughput** | 300-500 resources/minute |
+| **Response Time** | Tagged within 5-10 minutes (CloudTrail delay) |
+| **Throughput** | Batch processing of multiple resources |
 | **Cost** | ~$3-5/month for typical org |
 | **Scalability** | Serverless - auto-scales with Lambda |
+| **Multi-Region** | ✅ ONE Lambda handles ALL regions |
 
 ## 🏗️ Architecture
 
 ```
-CloudTrail (logs)
+CloudTrail (multi-region logs)
     ↓
-EventBridge (detects)
+S3 Bucket (log files)
     ↓
-Lambda Function (parses + tags)
+S3 Event Notification
+    ↓
+Lambda Function (parses + tags resources in all regions)
     ↓
 CloudWatch (audit trail)
 ```
+
+**Key Benefit**: ONE Lambda in ONE region can tag resources in ALL regions!
 
 ## 📁 Project Structure
 
 ```
 .
-├── IMPLEMENTATION_GUIDE.md      ← Full setup instructions
-├── ARCHITECTURE.md              ← System design details
+├── README.md                         ← This file
+├── ARCHITECTURE.md                   ← Technical architecture details
 ├── lambda_function/
-│   ├── lambda_handler.py        ← Main Lambda function
-│   ├── cloudtrail_parser.py     ← Event parsing
-│   ├── tag_manager.py           ← Multi-service tagging
-│   └── requirements.txt
+│   ├── lambda_handler.py             ← Main Lambda function
+│   ├── cloudtrail_parser.py          ← CloudTrail event parsing
+│   ├── tag_manager.py                ← Multi-service tagging logic
+│   ├── s3_cloudtrail_processor.py    ← S3 log processing
+│   └── requirements.txt              ← Lambda dependencies
 ├── deployment/
-│   ├── deploy.sh                ← Deployment automation
-│   └── teardown.sh              ← Cleanup
-├── iam/                         ← IAM policies
-└── eventbridge/                 ← EventBridge config
+│   ├── deploy.sh                     ← Automated deployment script
+│   └── teardown.sh                   ← Cleanup script
+├── tests/
+│   ├── test_cloudtrail_parser.py     ← Unit tests
+│   └── mock_events.json              ← Test event data
+└── requirements.txt                  ← Development dependencies
 ```
-
-## 📚 Documentation
-
-- **[IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md)** - Complete setup and deployment guide
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Technical architecture details
 
 ## ✨ Tags Applied
 
@@ -132,45 +118,24 @@ bash teardown.sh
 # Confirm with "yes" twice
 ```
 
-## 💡 Key Implementation Files
-
-- **`lambda_function/cloudtrail_parser.py`** - Parses CloudTrail events (251 lines)
-- **`lambda_function/tag_manager.py`** - Tags resources across 7 services (333 lines)
-- **`lambda_function/lambda_handler.py`** - Main orchestrator (232 lines)
-- **`deployment/deploy.sh`** - Automated deployment (285 lines)
-
 ## 📈 Scalability
 
-- **Current**: 300-500 resources/minute per region
-- **Multi-Region**: Deploy to multiple regions independently
-- **High Volume**: Increase Lambda memory from 256MB to 1024MB
-- **Cost Savings**: Enable CloudTrail filtering for 60-80% reduction
+- **Multi-Region**: ONE Lambda handles ALL regions automatically
+- **Batch Processing**: Processes multiple resources from each CloudTrail log file
+- **High Volume**: Lambda configured with 512MB memory and 5-minute timeout
+- **Cost Savings**: Single Lambda deployment reduces operational costs
 
-## 🔒 Security
+## 📚 Documentation
 
-- ✅ Least-privilege IAM permissions
-- ✅ CloudTrail encrypted at rest and in transit
-- ✅ Full audit trail in CloudWatch Logs
-- ✅ No sensitive data in code
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Detailed technical architecture and design decisions
 
-## 🚀 Next Steps
+## 🔗 AWS Services Used
 
-1. Read **[IMPLEMENTATION_GUIDE.md](./IMPLEMENTATION_GUIDE.md)** for full setup instructions
-2. Enable CloudTrail in your AWS account
-3. Run deployment script
-4. Test with a sample resource
-5. Monitor CloudWatch logs
-
-## 📞 Troubleshooting
-
-**No tags appearing?**
-- Check CloudTrail is logging: `aws cloudtrail get-trail-status --name auto-tagger-trail`
-- Verify EventBridge rule: `aws events describe-rule --name auto-tagger-rule`
-- Check Lambda logs: `aws logs tail /aws/lambda/auto-tagger`
-
-**Permission denied?**
-- Verify Lambda IAM role has correct policies
-- Check resource ARN matches policy
+- **AWS Lambda** - Serverless compute for tagging logic
+- **AWS CloudTrail** - API call logging across all regions
+- **Amazon S3** - CloudTrail log storage
+- **AWS IAM** - Permission management
+- **Amazon CloudWatch** - Logging and monitoring
 
 ## 📊 Performance Metrics
 
@@ -178,7 +143,8 @@ bash teardown.sh
 |--------|-------|
 | Cold Start | 2-5 seconds |
 | Warm Start | 100-500ms |
-| Per Resource | 2-3 seconds |
+| CloudTrail Delay | 5-10 minutes |
+| Batch Processing | Multiple resources per log file |
 | Monthly Cost (100K resources) | $3-5 |
 
 ---

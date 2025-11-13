@@ -2,7 +2,8 @@
 
 ##########################################################################
 # AWS Auto-Tagger Deployment Script
-# Deploys Lambda function, EventBridge rules, and IAM roles
+# Deploys Lambda function with S3 CloudTrail trigger
+# ONE Lambda in ONE region handles ALL regions!
 ##########################################################################
 
 set -e
@@ -15,50 +16,85 @@ PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
 FUNCTION_NAME="auto-tagger"
 LAMBDA_ROLE_NAME="auto-tagger-lambda-role"
-EVENTBRIDGE_ROLE_NAME="auto-tagger-eventbridge-role"
-DEAD_LETTER_QUEUE_NAME="auto-tagger-dlq"
-LAMBDA_TIMEOUT=60
-LAMBDA_MEMORY=256
+CLOUDTRAIL_NAME="auto-tagger-trail"
+CLOUDTRAIL_BUCKET_BASE="auto-tagger-cloudtrail-logs-1"
+LAMBDA_TIMEOUT=300  # 5 minutes for batch processing
+LAMBDA_MEMORY=512   # More memory for S3 downloads
 
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}AWS Auto-Tagger Deployment${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo -e "${BLUE}AWS Auto-Tagger Deployment${NC}"
+echo -e "${BLUE}========================================${NC}"
 
-# Get AWS Account ID
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=${AWS_REGION:-us-east-1}
 
-echo -e "${YELLOW}Account ID: ${ACCOUNT_ID}${NC}"
-echo -e "${YELLOW}Region: ${REGION}${NC}"
+echo -e "Account: ${ACCOUNT_ID}"
+echo -e "Region: ${REGION}"
+echo ""
 
-# Step 1: Create SQS Dead Letter Queue
-echo -e "\n${YELLOW}[1/6] Creating Dead Letter Queue...${NC}"
-DLQ_URL=$(aws sqs create-queue \
-  --queue-name ${DEAD_LETTER_QUEUE_NAME} \
-  --region ${REGION} \
-  --query 'QueueUrl' \
-  --output text 2>/dev/null || echo "queue-exists")
+# Step 1: Create S3 Bucket for CloudTrail
+echo -e "\n${YELLOW}[1/7] Creating S3 Bucket for CloudTrail...${NC}"
 
-if [ "$DLQ_URL" != "queue-exists" ]; then
-  echo -e "${GREEN}✓ Dead Letter Queue created: ${DLQ_URL}${NC}"
+FULL_BUCKET_NAME="${CLOUDTRAIL_BUCKET_BASE}-${ACCOUNT_ID}"
+
+if aws s3 ls "s3://${FULL_BUCKET_NAME}" 2>/dev/null; then
+    echo -e "${GREEN}✓ Bucket exists${NC}"
 else
-  DLQ_URL=$(aws sqs get-queue-url \
-    --queue-name ${DEAD_LETTER_QUEUE_NAME} \
-    --region ${REGION} \
-    --query 'QueueUrl' \
-    --output text)
-  echo -e "${GREEN}✓ Dead Letter Queue exists: ${DLQ_URL}${NC}"
+    if [ "$REGION" = "us-east-1" ]; then
+        aws s3api create-bucket --bucket ${FULL_BUCKET_NAME} --region ${REGION}
+    else
+        aws s3api create-bucket --bucket ${FULL_BUCKET_NAME} --region ${REGION} --create-bucket-configuration LocationConstraint=${REGION}
+    fi
+    echo -e "${GREEN}✓ Bucket created${NC}"
 fi
 
-# Step 2: Create Lambda Execution Role
-echo -e "\n${YELLOW}[2/6] Creating Lambda Execution Role...${NC}"
+# Step 2: Configure S3 Bucket Policy for CloudTrail
+echo -e "\n${YELLOW}[2/7] Configuring S3 Bucket Policy...${NC}"
 
-# Create trust policy
+cat > /tmp/cloudtrail-bucket-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AWSCloudTrailAclCheck",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudtrail.amazonaws.com"
+      },
+      "Action": "s3:GetBucketAcl",
+      "Resource": "arn:aws:s3:::${FULL_BUCKET_NAME}"
+    },
+    {
+      "Sid": "AWSCloudTrailWrite",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudtrail.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${FULL_BUCKET_NAME}/AWSLogs/${ACCOUNT_ID}/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:x-amz-acl": "bucket-owner-full-control"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+aws s3api put-bucket-policy \
+  --bucket ${FULL_BUCKET_NAME} \
+  --policy file:///tmp/cloudtrail-bucket-policy.json
+echo -e "${GREEN}✓ Done${NC}"
+
+# Step 3: Create Lambda Execution Role with S3 permissions
+echo -e "\n${YELLOW}[3/7] Creating Lambda Execution Role...${NC}"
+
 cat > /tmp/lambda-trust-policy.json << 'EOF'
 {
   "Version": "2012-10-17",
@@ -74,7 +110,6 @@ cat > /tmp/lambda-trust-policy.json << 'EOF'
 }
 EOF
 
-# Create role if it doesn't exist
 ROLE_ARN=$(aws iam create-role \
   --role-name ${LAMBDA_ROLE_NAME} \
   --assume-role-policy-document file:///tmp/lambda-trust-policy.json \
@@ -84,34 +119,76 @@ ROLE_ARN=$(aws iam create-role \
     --role-name ${LAMBDA_ROLE_NAME} \
     --query 'Role.Arn' \
     --output text)
+echo -e "${GREEN}✓ Done${NC}"
 
-echo -e "${GREEN}✓ Lambda role created/retrieved: ${ROLE_ARN}${NC}"
+# Step 4: Attach Policies to Lambda Role (including S3 read)
+echo -e "\n${YELLOW}[4/7] Attaching IAM Policies...${NC}"
 
-# Step 3: Attach Policies to Lambda Role
-echo -e "\n${YELLOW}[3/6] Attaching IAM Policies to Lambda Role...${NC}"
+# Enhanced policy with S3 read permissions
+cat > /tmp/lambda-s3-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:${ACCOUNT_ID}:*"
+    },
+    {
+      "Sid": "S3ReadCloudTrailLogs",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${FULL_BUCKET_NAME}",
+        "arn:aws:s3:::${FULL_BUCKET_NAME}/*"
+      ]
+    },
+    {
+      "Sid": "TaggingPermissions",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DescribeTags",
+        "s3:PutBucketTagging",
+        "s3:GetBucketTagging",
+        "rds:AddTagsToResource",
+        "rds:ListTagsForResource",
+        "lambda:TagResource",
+        "lambda:ListTags",
+        "dynamodb:TagResource",
+        "dynamodb:ListTagsOfResource",
+        "sns:TagResource",
+        "sns:ListTagsForResource",
+        "sqs:TagQueue",
+        "sqs:ListQueueTags"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
 
-# Create inline policy from the policy file
-POLICY_FILE="${PROJECT_ROOT}/iam/lambda_policy.json"
 aws iam put-role-policy \
   --role-name ${LAMBDA_ROLE_NAME} \
-  --policy-name auto-tagger-permissions \
-  --policy-document file://${POLICY_FILE}
+  --policy-name auto-tagger-s3-permissions \
+  --policy-document file:///tmp/lambda-s3-policy.json
+echo -e "${GREEN}✓ Done${NC}"
+sleep 10
 
-echo -e "${GREEN}✓ Policies attached to Lambda role${NC}"
-
-# Wait for role to be available
-echo -e "${YELLOW}Waiting for IAM role to be available...${NC}"
-sleep 5
-
-# Step 4: Package Lambda Function
-echo -e "\n${YELLOW}[4/6] Packaging Lambda Function...${NC}"
+# Step 5: Package Lambda Function
+echo -e "\n${YELLOW}[5/7] Packaging Lambda Function...${NC}"
 
 LAMBDA_DIR="${PROJECT_ROOT}/lambda_function"
 LAMBDA_ZIP="${PROJECT_ROOT}/lambda_function.zip"
 
-# Create deployment package - LEAN VERSION (no dependencies)
-# AWS Lambda includes boto3, botocore, requests, urllib3 pre-installed
-# so we only need to zip our source code
 rm -f ${LAMBDA_ZIP}
 
 cd ${LAMBDA_DIR}
@@ -119,16 +196,14 @@ zip -j ${LAMBDA_ZIP} \
   lambda_handler.py \
   cloudtrail_parser.py \
   tag_manager.py \
-  __init__.py > /dev/null 2>&1
+  s3_cloudtrail_processor.py > /dev/null 2>&1
 
-# Get zip file size
-ZIP_SIZE=$(ls -lh ${LAMBDA_ZIP} | awk '{print $5}')
-echo -e "${GREEN}✓ Lambda function packaged: ${LAMBDA_ZIP} (${ZIP_SIZE})${NC}"
+echo -e "${GREEN}✓ Done${NC}"
 
 cd ${SCRIPT_DIR}
 
-# Step 5: Create or Update Lambda Function
-echo -e "\n${YELLOW}[5/6] Creating/Updating Lambda Function...${NC}"
+# Step 6: Create or Update Lambda Function
+echo -e "\n${YELLOW}[6/7] Deploying Lambda Function...${NC}"
 
 LAMBDA_ARN=$(aws lambda create-function \
   --function-name ${FUNCTION_NAME} \
@@ -138,7 +213,7 @@ LAMBDA_ARN=$(aws lambda create-function \
   --zip-file fileb://${LAMBDA_ZIP} \
   --timeout ${LAMBDA_TIMEOUT} \
   --memory-size ${LAMBDA_MEMORY} \
-  --environment Variables='{ENVIRONMENT=production}' \
+  --environment Variables='{ENVIRONMENT=production,TRIGGER_MODE=s3}' \
   --region ${REGION} \
   --query 'FunctionArn' \
   --output text 2>/dev/null || \
@@ -149,187 +224,101 @@ LAMBDA_ARN=$(aws lambda create-function \
     --query 'FunctionArn' \
     --output text)
 
-echo -e "${GREEN}✓ Lambda function deployed: ${LAMBDA_ARN}${NC}"
+echo -e "${GREEN}✓ Done${NC}"
 
-# Step 6: Create EventBridge Rule
-echo -e "\n${YELLOW}[6/6] Creating EventBridge Rule...${NC}"
+if [ -z "$LAMBDA_ARN" ]; then
+  LAMBDA_ARN=$(aws lambda get-function --function-name ${FUNCTION_NAME} --region ${REGION} --query 'Configuration.FunctionArn' --output text)
+fi
 
-# Create EventBridge role
-cat > /tmp/eventbridge-trust-policy.json << 'EOF'
+aws lambda wait function-active --function-name ${FUNCTION_NAME} --region ${REGION}
+
+# Step 7: Configure S3 to trigger Lambda
+echo -e "\n${YELLOW}[7/7] Configuring S3 Event Notification...${NC}"
+
+aws lambda remove-permission \
+  --function-name ${FUNCTION_NAME} \
+  --statement-id AllowS3Invoke \
+  --region ${REGION} 2>/dev/null || true
+
+aws lambda add-permission \
+  --function-name ${FUNCTION_NAME} \
+  --statement-id AllowS3Invoke \
+  --action lambda:InvokeFunction \
+  --principal s3.amazonaws.com \
+  --source-arn "arn:aws:s3:::${FULL_BUCKET_NAME}" \
+  --region ${REGION}
+
+if [ $? -ne 0 ]; then
+  echo -e "${RED}✗ Failed to add Lambda permission${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Done${NC}"
+sleep 15
+
+# Create S3 notification configuration
+cat > /tmp/s3-notification.json << EOF
 {
-  "Version": "2012-10-17",
-  "Statement": [
+  "LambdaFunctionConfigurations": [
     {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "events.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
+      "Id": "CloudTrailLogCreated",
+      "LambdaFunctionArn": "${LAMBDA_ARN}",
+      "Events": ["s3:ObjectCreated:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            {
+              "Name": "suffix",
+              "Value": ".json.gz"
+            }
+          ]
+        }
+      }
     }
   ]
 }
 EOF
 
-EVENTBRIDGE_ROLE_ARN=$(aws iam create-role \
-  --role-name ${EVENTBRIDGE_ROLE_NAME} \
-  --assume-role-policy-document file:///tmp/eventbridge-trust-policy.json \
-  --query 'Role.Arn' \
+aws s3api put-bucket-notification-configuration \
+  --bucket ${FULL_BUCKET_NAME} \
+  --notification-configuration file:///tmp/s3-notification.json
+echo -e "${GREEN}✓ Done${NC}"
+
+# Step 8: Create or Update CloudTrail
+echo -e "\n${YELLOW}[Bonus] Setting up CloudTrail (if not exists)...${NC}"
+
+TRAIL_ARN=$(aws cloudtrail create-trail \
+  --name ${CLOUDTRAIL_NAME} \
+  --s3-bucket-name ${FULL_BUCKET_NAME} \
+  --is-multi-region-trail \
+  --enable-log-file-validation \
+  --region ${REGION} \
+  --query 'TrailARN' \
   --output text 2>/dev/null || \
-  aws iam get-role \
-    --role-name ${EVENTBRIDGE_ROLE_NAME} \
-    --query 'Role.Arn' \
+  aws cloudtrail describe-trails \
+    --trail-name-list ${CLOUDTRAIL_NAME} \
+    --query 'trailList[0].TrailARN' \
     --output text)
 
-# Create EventBridge role policy
-cat > /tmp/eventbridge-policy.json << EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "lambda:InvokeFunction",
-      "Resource": "${LAMBDA_ARN}"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "sqs:SendMessage",
-      "Resource": "arn:aws:sqs:${REGION}:${ACCOUNT_ID}:${DEAD_LETTER_QUEUE_NAME}"
-    }
-  ]
-}
-EOF
-
-aws iam put-role-policy \
-  --role-name ${EVENTBRIDGE_ROLE_NAME} \
-  --policy-name eventbridge-lambda-invoke \
-  --policy-document file:///tmp/eventbridge-policy.json 2>/dev/null || true
-
-sleep 3
-
-# Get DLQ ARN
-DLQ_ARN=$(aws sqs get-queue-attributes \
-  --queue-url ${DLQ_URL} \
-  --attribute-names QueueArn \
-  --region ${REGION} \
-  --query 'Attributes.QueueArn' \
-  --output text)
-
-# Create or update EventBridge rule
-RULE_NAME="auto-tagger-rule"
-
-aws events put-rule \
-  --name ${RULE_NAME} \
-  --event-bus-name default \
-  --state ENABLED \
-  --region ${REGION} \
-  --event-pattern '{
-    "source": ["aws.ec2", "aws.s3", "aws.rds", "aws.lambda", "aws.dynamodb", "aws.sns", "aws.sqs"],
-    "detail-type": ["AWS API Call via CloudTrail"],
-    "detail": {
-      "eventName": [
-        "RunInstances",
-        "CreateVolume",
-        "CreateSnapshot",
-        "CreateSecurityGroup",
-        "CreateBucket",
-        "CreateDBInstance",
-        "CreateDBCluster",
-        "CreateFunction",
-        "CreateTable",
-        "CreateTopic",
-        "CreateQueue"
-      ]
-    }
-  }'
-
-echo -e "${GREEN}✓ EventBridge rule created: ${RULE_NAME}${NC}"
-
-# Wait for EventBridge role policy to propagate
-echo -e "${YELLOW}Waiting for EventBridge role policy to propagate...${NC}"
-sleep 5
-
-# Add Lambda as target (put-targets creates or updates)
-echo -e "${YELLOW}Adding Lambda as target to EventBridge rule...${NC}"
-
-# Create targets JSON file to avoid quote escaping issues
-cat > /tmp/eventbridge-targets.json << TARGETS_EOF
-[
-  {
-    "Id": "1",
-    "Arn": "${LAMBDA_ARN}",
-    "RoleArn": "${EVENTBRIDGE_ROLE_ARN}",
-    "DeadLetterConfig": {
-      "Arn": "${DLQ_ARN}"
-    }
-  }
-]
-TARGETS_EOF
-
-if aws events put-targets \
-  --rule ${RULE_NAME} \
-  --region ${REGION} \
-  --targets file:///tmp/eventbridge-targets.json 2>&1; then
-  echo -e "${GREEN}✓ Lambda added to EventBridge rule targets${NC}"
+if [ "$TRAIL_ARN" != "None" ]; then
+    aws cloudtrail start-logging --name ${CLOUDTRAIL_NAME} --region ${REGION} 2>/dev/null || true
+    echo -e "${GREEN}✓ Done${NC}"
 else
-  echo -e "${RED}✗ Failed to add Lambda to EventBridge targets${NC}"
-  exit 1
-fi
-
-# Add Lambda permission for EventBridge
-echo -e "${YELLOW}Adding Lambda invoke permission for EventBridge...${NC}"
-if aws lambda add-permission \
-  --function-name ${FUNCTION_NAME} \
-  --statement-id AllowEventBridge \
-  --action lambda:InvokeFunction \
-  --principal events.amazonaws.com \
-  --source-arn "arn:aws:events:${REGION}:${ACCOUNT_ID}:rule/${RULE_NAME}" \
-  --region ${REGION} 2>&1; then
-  echo -e "${GREEN}✓ Lambda permission added for EventBridge${NC}"
-else
-  echo -e "${YELLOW}(Lambda permission may already exist - that's okay)${NC}"
-fi
-
-# Verify targets were created
-echo -e "${YELLOW}Verifying EventBridge targets...${NC}"
-TARGET_COUNT=$(aws events list-targets-by-rule \
-  --rule ${RULE_NAME} \
-  --region ${REGION} \
-  --query 'length(Targets)' \
-  --output text)
-
-if [ "$TARGET_COUNT" -gt 0 ]; then
-  echo -e "${GREEN}✓ EventBridge targets verified: ${TARGET_COUNT} target(s) found${NC}"
-else
-  echo -e "${RED}✗ ERROR: No targets found for EventBridge rule!${NC}"
-  echo -e "${RED}   This means Lambda will NOT be invoked.${NC}"
-  echo -e "${RED}   Please run the following to add targets manually:${NC}"
-  echo -e "${RED}   aws events put-targets \\${NC}"
-  echo -e "${RED}     --rule ${RULE_NAME} \\${NC}"
-  echo -e "${RED}     --region ${REGION} \\${NC}"
-  echo -e "${RED}     --targets \"Id\"=\"1\",\"Arn\"=\"${LAMBDA_ARN}\",\"RoleArn\"=\"${EVENTBRIDGE_ROLE_ARN}\",\"DeadLetterConfig\"=\"{\\\"Arn\\\":\\\"${DLQ_ARN}\\\"}\"${NC}"
-  exit 1
+    echo -e "${YELLOW}⚠ CloudTrail may already exist${NC}"
 fi
 
 # Cleanup
 rm -f /tmp/lambda-trust-policy.json
-rm -f /tmp/eventbridge-trust-policy.json
-rm -f /tmp/eventbridge-policy.json
-rm -f /tmp/eventbridge-targets.json
+rm -f /tmp/lambda-s3-policy.json
+rm -f /tmp/cloudtrail-bucket-policy.json
+rm -f /tmp/s3-notification.json
 
 echo -e "\n${GREEN}========================================${NC}"
-echo -e "${GREEN}Deployment Completed Successfully! ✓${NC}"
+echo -e "${GREEN}Deployment Complete${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo -e "\n${YELLOW}Summary:${NC}"
-echo -e "  Function Name: ${FUNCTION_NAME}"
-echo -e "  Lambda ARN: ${LAMBDA_ARN}"
-echo -e "  Lambda Role: ${ROLE_ARN}"
-echo -e "  EventBridge Rule: ${RULE_NAME}"
-echo -e "  Dead Letter Queue: ${DLQ_URL}"
-echo -e "  Region: ${REGION}"
-echo -e "\n${YELLOW}Next Steps:${NC}"
-echo -e "  1. Enable CloudTrail in your AWS account"
-echo -e "  2. Verify the Lambda function is working by checking CloudWatch logs"
-echo -e "  3. Create a test resource and verify it gets tagged"
-echo -e "\n${YELLOW}Monitor Logs:${NC}"
+echo -e "Lambda: ${FUNCTION_NAME}"
+echo -e "Region: ${REGION}"
+echo -e "Bucket: ${FULL_BUCKET_NAME}"
+echo -e "\nMonitor logs:"
 echo -e "  aws logs tail /aws/lambda/${FUNCTION_NAME} --follow"
+echo ""
 

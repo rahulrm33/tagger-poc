@@ -1,7 +1,4 @@
-"""
-Tag Manager
-Handles applying tags to AWS resources across different services
-"""
+"""Tag manager for AWS resources."""
 
 import logging
 from typing import Dict, List, Tuple, Optional
@@ -14,9 +11,8 @@ logger.setLevel(logging.INFO)
 
 
 class TagManager:
-    """Manage resource tagging across multiple AWS services"""
+    """Manages tagging across AWS services."""
 
-    # Service-specific tag clients and methods
     SUPPORTED_SERVICES = {
         "ec2": {
             "client": "ec2",
@@ -49,17 +45,14 @@ class TagManager:
     }
 
     def __init__(self, region: str = "us-east-1"):
-        """Initialize TagManager with AWS clients"""
         self.default_region = region
-        self.clients = {}  # Format: {service}_{region} -> client
+        self.clients = {}
         self.tagged_resources = []
         self.failed_resources = []
 
     def _get_client(self, service: str, region: str = None):
-        """Get or create boto3 client for service in specific region"""
-        if region is None:
-            region = self.default_region
-        
+        """Get or create boto3 client."""
+        region = region or self.default_region
         client_key = f"{service}_{region}"
         if client_key not in self.clients:
             self.clients[client_key] = boto3.client(service, region_name=region)
@@ -74,49 +67,31 @@ class TagManager:
         region: str = None,
         additional_tags: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[str], List[Dict]]:
-        """
-        Tag a resource with creator information
-        
-        Args:
-            service: AWS service (ec2, s3, rds, etc.)
-            resource_type: Type of resource
-            resource_ids: List of resource IDs to tag
-            user_arn: ARN of user who created the resource
-            region: AWS region where the resource was created (defaults to configured region)
-            additional_tags: Optional additional tags to apply
-            
-        Returns:
-            Tuple of (tagged_resource_ids, failed_resources)
-        """
+        """Tag resources with creator information."""
         if service not in self.SUPPORTED_SERVICES:
-            logger.error(f"Service '{service}' not supported")
             return [], [{"resource_id": rid, "error": "Unsupported service"} for rid in resource_ids]
 
         try:
             method_name = self.SUPPORTED_SERVICES[service]["tag_method"]
             method = getattr(self, method_name, None)
-            
             if not method:
-                logger.error(f"Tag method not found for service '{service}'")
                 return [], [{"resource_id": rid, "error": "Method not found"} for rid in resource_ids]
             
             return method(resource_ids, user_arn, resource_type, region, additional_tags)
             
         except Exception as e:
-            logger.error(f"Error tagging {service} resource: {str(e)}")
+            logger.error(f"Tagging error: {str(e)}")
             return [], [{"resource_id": rid, "error": str(e)} for rid in resource_ids]
 
     def _build_tags(self, user_arn: str, additional_tags: Optional[Dict] = None) -> Dict[str, str]:
-        """Build tag dictionary with creator info"""
+        """Build tag dictionary."""
         tags = {
             "CreatedBy": user_arn,
             "CreatedDate": datetime.utcnow().isoformat(),
             "ManagedBy": "auto-tagger",
         }
-        
         if additional_tags:
             tags.update(additional_tags)
-        
         return tags
 
     def _tag_ec2_resource(
@@ -127,26 +102,17 @@ class TagManager:
         region: str = None,
         additional_tags: Optional[Dict] = None,
     ) -> Tuple[List[str], List[Dict]]:
-        """Tag EC2 resources (instances, volumes, snapshots, security groups)"""
         client = self._get_client("ec2", region)
         tags = self._build_tags(user_arn, additional_tags)
-        
-        # Convert to EC2 tag format
         tag_list = [{"Key": k, "Value": v} for k, v in tags.items()]
         
-        tagged = []
-        failed = []
-        
+        tagged, failed = [], []
         for resource_id in resource_ids:
             try:
                 client.create_tags(Resources=[resource_id], Tags=tag_list)
                 tagged.append(resource_id)
-                logger.info(f"Tagged EC2 {resource_type} '{resource_id}' with creator: {user_arn}")
             except ClientError as e:
-                error_code = e.response["Error"]["Code"]
-                error_msg = e.response["Error"]["Message"]
-                failed.append({"resource_id": resource_id, "error": f"{error_code}: {error_msg}"})
-                logger.error(f"Failed to tag EC2 resource '{resource_id}': {error_msg}")
+                failed.append({"resource_id": resource_id, "error": e.response["Error"]["Code"]})
         
         return tagged, failed
 
@@ -158,28 +124,17 @@ class TagManager:
         region: str = None,
         additional_tags: Optional[Dict] = None,
     ) -> Tuple[List[str], List[Dict]]:
-        """Tag S3 buckets"""
-        # S3 is global, but we'll use the region for consistency
         client = self._get_client("s3", region)
         tags = self._build_tags(user_arn, additional_tags)
+        tag_set = {"TagSet": [{"Key": k, "Value": v} for k, v in tags.items()]}
         
-        # Convert to S3 tag format
-        tag_list = [{"Key": k, "Value": v} for k, v in tags.items()]
-        tag_set = {"TagSet": tag_list}
-        
-        tagged = []
-        failed = []
-        
+        tagged, failed = [], []
         for bucket_name in resource_ids:
             try:
                 client.put_bucket_tagging(Bucket=bucket_name, Tagging=tag_set)
                 tagged.append(bucket_name)
-                logger.info(f"Tagged S3 bucket '{bucket_name}' with creator: {user_arn}")
             except ClientError as e:
-                error_code = e.response["Error"]["Code"]
-                error_msg = e.response["Error"]["Message"]
-                failed.append({"resource_id": bucket_name, "error": f"{error_code}: {error_msg}"})
-                logger.error(f"Failed to tag S3 bucket '{bucket_name}': {error_msg}")
+                failed.append({"resource_id": bucket_name, "error": e.response["Error"]["Code"]})
         
         return tagged, failed
 
@@ -215,12 +170,10 @@ class TagManager:
                 
                 client.add_tags_to_resource(ResourceName=arn, Tags=tag_list)
                 tagged.append(resource_id)
-                logger.info(f"Tagged RDS {resource_type} '{resource_id}' with creator: {user_arn}")
             except ClientError as e:
                 error_code = e.response["Error"]["Code"]
                 error_msg = e.response["Error"]["Message"]
                 failed.append({"resource_id": resource_id, "error": f"{error_code}: {error_msg}"})
-                logger.error(f"Failed to tag RDS resource '{resource_id}': {error_msg}")
         
         return tagged, failed
 
@@ -243,7 +196,6 @@ class TagManager:
             try:
                 client.tag_resource(Resource=function_name, Tags=tags)
                 tagged.append(function_name)
-                logger.info(f"Tagged Lambda function '{function_name}' with creator: {user_arn}")
             except ClientError as e:
                 error_code = e.response["Error"]["Code"]
                 error_msg = e.response["Error"]["Message"]
@@ -278,7 +230,6 @@ class TagManager:
                 
                 client.tag_resource(ResourceArn=table_arn, Tags=tag_list)
                 tagged.append(table_name)
-                logger.info(f"Tagged DynamoDB table '{table_name}' with creator: {user_arn}")
             except ClientError as e:
                 error_code = e.response["Error"]["Code"]
                 error_msg = e.response["Error"]["Message"]
@@ -309,7 +260,6 @@ class TagManager:
             try:
                 client.tag_resource(ResourceArn=topic_arn, Tags=tag_list)
                 tagged.append(topic_arn)
-                logger.info(f"Tagged SNS topic '{topic_arn}' with creator: {user_arn}")
             except ClientError as e:
                 error_code = e.response["Error"]["Code"]
                 error_msg = e.response["Error"]["Message"]
@@ -337,7 +287,6 @@ class TagManager:
             try:
                 client.tag_queue_async(QueueUrl=queue_url, Tags=tags)
                 tagged.append(queue_url)
-                logger.info(f"Tagged SQS queue '{queue_url}' with creator: {user_arn}")
             except ClientError as e:
                 error_code = e.response["Error"]["Code"]
                 error_msg = e.response["Error"]["Message"]
