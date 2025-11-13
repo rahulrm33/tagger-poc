@@ -1,0 +1,109 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    },
+    {
+      "Sid": "EC2Tagging",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DescribeInstances",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeSecurityGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3Tagging",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutBucketTagging",
+        "s3:GetBucketTagging",
+        "s3:ListBucket"
+      ],
+      "Resource": "arn:aws:s3:::*"
+    },
+    {
+      "Sid": "RDSTagging",
+      "Effect": "Allow",
+      "Action": [
+        "rds:AddTagsToResource",
+        "rds:ListTagsForResource",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters"
+      ],
+      "Resource": [
+        "arn:aws:rds:*:*:db:*",
+        "arn:aws:rds:*:*:cluster:*"
+      ]
+    },
+    {
+      "Sid": "LambdaTagging",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags"
+      ],
+      "Resource": "arn:aws:lambda:*:*:function:*"
+    },
+    {
+      "Sid": "DynamoDBTagging",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/*"
+    },
+    {
+      "Sid": "SNSTagging",
+      "Effect": "Allow",
+      "Action": [
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:*:*:*"
+    },
+    {
+      "Sid": "SQSTagging",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:TagQueueAsync",
+        "sqs:UntagQueueAsync",
+        "sqs:ListQueueTags"
+      ],
+      "Resource": "arn:aws:sqs:*:*:*"
+    },
+    {
+      "Sid": "CloudTrailRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudtrail:LookupEvents"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "STSGetCallerIdentity",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+

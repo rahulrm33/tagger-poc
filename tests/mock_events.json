@@ -1,0 +1,180 @@
+{
+  "ec2_run_instances": {
+    "detail": {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXD2O7EXAMPLE:session-name",
+        "arn": "arn:aws:iam::123456789012:user/alice",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAI23HXD2O7EXAMPLE",
+        "userName": "alice"
+      },
+      "eventTime": "2024-01-15T10:30:00Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "RunInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "192.0.2.1",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0123456789abcdef0"
+            },
+            {
+              "instanceId": "i-0abcdef0123456789"
+            }
+          ]
+        },
+        "imageId": "ami-0c55b159cbfafe1f0",
+        "minCount": 2,
+        "maxCount": 2,
+        "instanceType": "t3.medium"
+      },
+      "responseElements": {
+        "reservationId": "r-0123456789abcdef0",
+        "ownerId": "123456789012",
+        "groupSet": [],
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0123456789abcdef0",
+              "imageId": "ami-0c55b159cbfafe1f0",
+              "instanceState": {
+                "code": 0,
+                "name": "pending"
+              }
+            }
+          ]
+        }
+      },
+      "requestID": "12345678-1234-1234-1234-123456789012"
+    }
+  },
+  "s3_create_bucket": {
+    "detail": {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXD2O7EXAMPLE:session-name",
+        "arn": "arn:aws:iam::123456789012:user/bob",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAI23HXD2O7EXAMPLE",
+        "userName": "bob"
+      },
+      "eventTime": "2024-01-15T11:00:00Z",
+      "eventSource": "s3.amazonaws.com",
+      "eventName": "CreateBucket",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "192.0.2.2",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "bucketName": "my-data-bucket-20240115",
+        "acl": "private"
+      },
+      "responseElements": {
+        "location": "http://my-data-bucket-20240115.s3.amazonaws.com/"
+      },
+      "requestID": "87654321-4321-4321-4321-210987654321"
+    }
+  },
+  "rds_create_instance": {
+    "detail": {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXD2O7EXAMPLE:session-name",
+        "arn": "arn:aws:iam::123456789012:user/dba-admin",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAI23HXD2O7EXAMPLE",
+        "userName": "dba-admin"
+      },
+      "eventTime": "2024-01-15T12:00:00Z",
+      "eventSource": "rds.amazonaws.com",
+      "eventName": "CreateDBInstance",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "192.0.2.3",
+      "userAgent": "aws-console",
+      "requestParameters": {
+        "dBInstanceIdentifier": "production-db",
+        "dBInstanceClass": "db.t3.medium",
+        "engine": "mysql",
+        "masterUsername": "admin"
+      },
+      "responseElements": {
+        "dBInstanceIdentifier": "production-db",
+        "dBInstanceStatus": "creating",
+        "masterUsername": "admin"
+      },
+      "requestID": "11111111-2222-3333-4444-555555555555"
+    }
+  },
+  "lambda_create_function": {
+    "detail": {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXD2O7EXAMPLE:session-name",
+        "arn": "arn:aws:iam::123456789012:user/lambda-dev",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAI23HXD2O7EXAMPLE",
+        "userName": "lambda-dev"
+      },
+      "eventTime": "2024-01-15T14:00:00Z",
+      "eventSource": "lambda.amazonaws.com",
+      "eventName": "CreateFunction",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "192.0.2.5",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "functionName": "data-processor",
+        "runtime": "python3.11",
+        "role": "arn:aws:iam::123456789012:role/lambda-execution-role"
+      },
+      "responseElements": {
+        "functionName": "data-processor",
+        "functionArn": "arn:aws:lambda:us-east-1:123456789012:function:data-processor",
+        "runtime": "python3.11"
+      },
+      "requestID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    }
+  },
+  "dynamodb_create_table": {
+    "detail": {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXD2O7EXAMPLE:session-name",
+        "arn": "arn:aws:iam::123456789012:user/dynamodb-admin",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAI23HXD2O7EXAMPLE",
+        "userName": "dynamodb-admin"
+      },
+      "eventTime": "2024-01-15T15:00:00Z",
+      "eventSource": "dynamodb.amazonaws.com",
+      "eventName": "CreateTable",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "192.0.2.6",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "tableName": "user-sessions",
+        "keySchema": [
+          {
+            "attributeName": "sessionId",
+            "keyType": "HASH"
+          }
+        ]
+      },
+      "responseElements": {
+        "tableDescription": {
+          "tableName": "user-sessions",
+          "tableStatus": "CREATING",
+          "tableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/user-sessions"
+        }
+      },
+      "requestID": "ffffffff-gggg-hhhh-iiii-jjjjjjjjjjjj"
+    }
+  }
+}
+

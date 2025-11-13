@@ -1,0 +1,42 @@
+{
+  "auto_tagger_rule": {
+    "Name": "auto-tagger-cloudtrail-rule",
+    "Description": "Capture AWS resource creation events from CloudTrail for auto-tagging",
+    "EventBusName": "default",
+    "EventPattern": {
+      "source": ["aws.ec2", "aws.s3", "aws.rds", "aws.lambda", "aws.dynamodb", "aws.sns", "aws.sqs"],
+      "detail-type": ["AWS API Call via CloudTrail"],
+      "detail": {
+        "eventName": [
+          "RunInstances",
+          "CreateVolume",
+          "CreateSnapshot",
+          "CreateSecurityGroup",
+          "CreateBucket",
+          "CreateDBInstance",
+          "CreateDBCluster",
+          "CreateFunction",
+          "CreateTable",
+          "CreateTopic",
+          "CreateQueue"
+        ]
+      }
+    },
+    "State": "ENABLED",
+    "Targets": [
+      {
+        "Arn": "arn:aws:lambda:REGION:ACCOUNT_ID:function:auto-tagger",
+        "Id": "AutoTaggerLambda",
+        "RoleArn": "arn:aws:iam::ACCOUNT_ID:role/auto-tagger-eventbridge-role",
+        "RetryPolicy": {
+          "MaximumEventAge": 3600,
+          "MaximumRetryAttempts": 2
+        },
+        "DeadLetterConfig": {
+          "Arn": "arn:aws:sqs:REGION:ACCOUNT_ID:auto-tagger-dlq"
+        }
+      }
+    ]
+  }
+}
+

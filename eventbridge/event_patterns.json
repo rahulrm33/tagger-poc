@@ -1,0 +1,67 @@
+{
+  "ec2_creation": {
+    "source": ["aws.ec2"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["ec2.amazonaws.com"],
+      "eventName": [
+        "RunInstances",
+        "CreateVolume",
+        "CreateSnapshot",
+        "CreateSecurityGroup"
+      ]
+    }
+  },
+  "s3_creation": {
+    "source": ["aws.s3"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["s3.amazonaws.com"],
+      "eventName": ["CreateBucket"]
+    }
+  },
+  "rds_creation": {
+    "source": ["aws.rds"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["rds.amazonaws.com"],
+      "eventName": [
+        "CreateDBInstance",
+        "CreateDBCluster"
+      ]
+    }
+  },
+  "lambda_creation": {
+    "source": ["aws.lambda"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["lambda.amazonaws.com"],
+      "eventName": ["CreateFunction"]
+    }
+  },
+  "dynamodb_creation": {
+    "source": ["aws.dynamodb"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["dynamodb.amazonaws.com"],
+      "eventName": ["CreateTable"]
+    }
+  },
+  "sns_creation": {
+    "source": ["aws.sns"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["sns.amazonaws.com"],
+      "eventName": ["CreateTopic"]
+    }
+  },
+  "sqs_creation": {
+    "source": ["aws.sqs"],
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "detail": {
+      "eventSource": ["sqs.amazonaws.com"],
+      "eventName": ["CreateQueue"]
+    }
+  }
+}
+
