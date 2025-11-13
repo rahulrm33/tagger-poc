@@ -27,34 +27,26 @@ CLOUDTRAIL_BUCKET_BASE="auto-tagger-cloudtrail-logs-1"
 LAMBDA_TIMEOUT=300  # 5 minutes for batch processing
 LAMBDA_MEMORY=512   # More memory for S3 downloads
 
-echo -e "${BLUE}AWS Auto-Tagger Deployment${NC}"
-echo -e "${BLUE}========================================${NC}"
-
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=${AWS_REGION:-us-east-1}
 
-echo -e "Account: ${ACCOUNT_ID}"
-echo -e "Region: ${REGION}"
-echo ""
+echo -e "${BLUE}Auto-Tagger Deployment | Account: ${ACCOUNT_ID} | Region: ${REGION}${NC}"
 
-# Step 1: Create S3 Bucket for CloudTrail
-echo -e "\n${YELLOW}[1/7] Creating S3 Bucket for CloudTrail...${NC}"
-
+echo -e "\n${YELLOW}[1/7] S3 Bucket...${NC}"
 FULL_BUCKET_NAME="${CLOUDTRAIL_BUCKET_BASE}-${ACCOUNT_ID}"
 
 if aws s3 ls "s3://${FULL_BUCKET_NAME}" 2>/dev/null; then
-    echo -e "${GREEN}✓ Bucket exists${NC}"
+    echo -e "${GREEN}✓ Exists${NC}"
 else
     if [ "$REGION" = "us-east-1" ]; then
         aws s3api create-bucket --bucket ${FULL_BUCKET_NAME} --region ${REGION}
     else
         aws s3api create-bucket --bucket ${FULL_BUCKET_NAME} --region ${REGION} --create-bucket-configuration LocationConstraint=${REGION}
     fi
-    echo -e "${GREEN}✓ Bucket created${NC}"
+    echo -e "${GREEN}✓ Created${NC}"
 fi
 
-# Step 2: Configure S3 Bucket Policy for CloudTrail
-echo -e "\n${YELLOW}[2/7] Configuring S3 Bucket Policy...${NC}"
+echo -e "${YELLOW}[2/7] S3 Bucket Policy...${NC}"
 
 cat > /tmp/cloudtrail-bucket-policy.json << EOF
 {
@@ -92,8 +84,7 @@ aws s3api put-bucket-policy \
   --policy file:///tmp/cloudtrail-bucket-policy.json
 echo -e "${GREEN}✓ Done${NC}"
 
-# Step 3: Create Lambda Execution Role with S3 permissions
-echo -e "\n${YELLOW}[3/7] Creating Lambda Execution Role...${NC}"
+echo -e "${YELLOW}[3/7] Lambda IAM Role...${NC}"
 
 cat > /tmp/lambda-trust-policy.json << 'EOF'
 {
@@ -121,8 +112,7 @@ ROLE_ARN=$(aws iam create-role \
     --output text)
 echo -e "${GREEN}✓ Done${NC}"
 
-# Step 4: Attach Policies to Lambda Role (including S3 read)
-echo -e "\n${YELLOW}[4/7] Attaching IAM Policies...${NC}"
+echo -e "${YELLOW}[4/7] IAM Policies...${NC}"
 
 # Enhanced policy with S3 read permissions
 cat > /tmp/lambda-s3-policy.json << EOF
@@ -183,8 +173,7 @@ aws iam put-role-policy \
 echo -e "${GREEN}✓ Done${NC}"
 sleep 10
 
-# Step 5: Package Lambda Function
-echo -e "\n${YELLOW}[5/7] Packaging Lambda Function...${NC}"
+echo -e "${YELLOW}[5/7] Package Lambda...${NC}"
 
 LAMBDA_DIR="${PROJECT_ROOT}/lambda_function"
 LAMBDA_ZIP="${PROJECT_ROOT}/lambda_function.zip"
@@ -202,8 +191,7 @@ echo -e "${GREEN}✓ Done${NC}"
 
 cd ${SCRIPT_DIR}
 
-# Step 6: Create or Update Lambda Function
-echo -e "\n${YELLOW}[6/7] Deploying Lambda Function...${NC}"
+echo -e "${YELLOW}[6/7] Deploy Lambda...${NC}"
 
 LAMBDA_ARN=$(aws lambda create-function \
   --function-name ${FUNCTION_NAME} \
@@ -232,8 +220,7 @@ fi
 
 aws lambda wait function-active --function-name ${FUNCTION_NAME} --region ${REGION}
 
-# Step 7: Configure S3 to trigger Lambda
-echo -e "\n${YELLOW}[7/7] Configuring S3 Event Notification...${NC}"
+echo -e "${YELLOW}[7/7] S3 Event Trigger...${NC}"
 
 aws lambda remove-permission \
   --function-name ${FUNCTION_NAME} \
@@ -283,8 +270,7 @@ aws s3api put-bucket-notification-configuration \
   --notification-configuration file:///tmp/s3-notification.json
 echo -e "${GREEN}✓ Done${NC}"
 
-# Step 8: Create or Update CloudTrail
-echo -e "\n${YELLOW}[Bonus] Setting up CloudTrail (if not exists)...${NC}"
+echo -e "${YELLOW}[8/8] CloudTrail Setup...${NC}"
 
 TRAIL_ARN=$(aws cloudtrail create-trail \
   --name ${CLOUDTRAIL_NAME} \
@@ -301,10 +287,8 @@ TRAIL_ARN=$(aws cloudtrail create-trail \
 
 if [ "$TRAIL_ARN" != "None" ]; then
     aws cloudtrail start-logging --name ${CLOUDTRAIL_NAME} --region ${REGION} 2>/dev/null || true
-    echo -e "${GREEN}✓ Done${NC}"
-else
-    echo -e "${YELLOW}⚠ CloudTrail may already exist${NC}"
 fi
+echo -e "${GREEN}✓ Done${NC}"
 
 # Cleanup
 rm -f /tmp/lambda-trust-policy.json
@@ -312,13 +296,6 @@ rm -f /tmp/lambda-s3-policy.json
 rm -f /tmp/cloudtrail-bucket-policy.json
 rm -f /tmp/s3-notification.json
 
-echo -e "\n${GREEN}========================================${NC}"
-echo -e "${GREEN}Deployment Complete${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo -e "Lambda: ${FUNCTION_NAME}"
-echo -e "Region: ${REGION}"
-echo -e "Bucket: ${FULL_BUCKET_NAME}"
-echo -e "\nMonitor logs:"
-echo -e "  aws logs tail /aws/lambda/${FUNCTION_NAME} --follow"
-echo ""
+echo -e "\n${GREEN}✓ Deployment Complete | Lambda: ${FUNCTION_NAME} | Region: ${REGION}${NC}"
+echo -e "Monitor: aws logs tail /aws/lambda/${FUNCTION_NAME} --follow"
 
