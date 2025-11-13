@@ -249,5 +249,3 @@ aws cloudwatch get-metric-statistics \
 4. **Advanced Analytics**: Query tags across all resources
 5. **Cost Allocation**: Use tags for cost center allocation
 6. **Notification System**: Alert on tagging failures via SNS
-
----
