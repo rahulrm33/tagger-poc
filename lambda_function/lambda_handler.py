@@ -2,14 +2,19 @@
 AWS Auto-Tagging Lambda Handler
 Main entry point for the Lambda function that processes CloudTrail events
 and automatically tags resources with creator ARN
+
+Supports TWO trigger modes:
+1. EventBridge (regional) - One Lambda per region
+2. S3 CloudTrail logs (multi-region) - One Lambda handles all regions
 """
 
 import json
 import logging
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 from cloudtrail_parser import CloudTrailParser
 from tag_manager import TagManager
+from s3_cloudtrail_processor import S3CloudTrailProcessor
 
 # Configure logging
 logger = logging.getLogger()
@@ -24,90 +29,40 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Lambda handler for auto-tagging AWS resources
     
-    Triggered by EventBridge when resources are created via CloudTrail events.
+    Supports two modes:
+    - EventBridge events (single event, regional)
+    - S3 events (batch events, multi-region)
     
     Args:
-        event: EventBridge event containing CloudTrail detail
+        event: EventBridge event OR S3 event notification
         context: Lambda context object
         
     Returns:
         Response with tagging results
     """
     
-    logger.info(f"Received event: {json.dumps(event)}")
+    logger.info(f"Received event type: {event.get('detail-type') or 'S3'}")
+    logger.info(f"Event: {json.dumps(event)}")
     
     try:
-        # Parse CloudTrail event
-        parsed_event = CloudTrailParser.parse_event(event)
-        
-        if not parsed_event:
-            logger.warning("Could not parse event or event not supported")
+        # Detect event source
+        if S3CloudTrailProcessor.is_s3_event(event):
+            # S3 mode: Process CloudTrail logs from S3 (multi-region support)
+            logger.info("Processing S3 CloudTrail log event (multi-region mode)")
+            return handle_s3_event(event)
+        elif S3CloudTrailProcessor.is_eventbridge_event(event):
+            # EventBridge mode: Process single event (regional)
+            logger.info("Processing EventBridge event (regional mode)")
+            return handle_eventbridge_event(event)
+        else:
+            logger.error("Unknown event type")
             return {
                 "statusCode": 400,
                 "body": json.dumps({
-                    "message": "Event not supported or could not be parsed",
+                    "message": "Unknown event type - expected EventBridge or S3",
                     "event": event
                 })
             }
-        
-        logger.info(f"Parsed event: {json.dumps(parsed_event)}")
-        
-        # Extract information
-        user_arn = parsed_event["user_arn"]
-        service = parsed_event["service"]
-        resource_type = parsed_event["resource_type"]
-        resource_ids = parsed_event["resource_ids"]
-        event_name = parsed_event["event_name"]
-        resource_region = parsed_event.get("region")  # Region where resource was created
-        
-        logger.info(
-            f"Processing {service} resource creation: "
-            f"user={user_arn}, event={event_name}, "
-            f"resource_type={resource_type}, resource_count={len(resource_ids)}, "
-            f"region={resource_region}"
-        )
-        
-        # Initialize tag manager with Lambda's region as default
-        lambda_region = os.environ.get("AWS_REGION", "us-east-1")
-        tag_manager = TagManager(region=lambda_region)
-        
-        # Tag resources (will use resource's region from CloudTrail)
-        tagged_resources, failed_resources = tag_manager.tag_resource(
-            service=service,
-            resource_type=resource_type,
-            resource_ids=resource_ids,
-            user_arn=user_arn,
-            region=resource_region,
-            additional_tags=_get_additional_tags(event)
-        )
-        
-        # Prepare response
-        response = {
-            "statusCode": 200,
-            "body": json.dumps({
-                "message": "Resource tagging completed",
-                "event_name": event_name,
-                "service": service,
-                "resource_type": resource_type,
-                "tagged_count": len(tagged_resources),
-                "failed_count": len(failed_resources),
-                "tagged_resources": tagged_resources,
-                "failed_resources": failed_resources,
-                "user_arn": user_arn,
-                "timestamp": parsed_event.get("event_time")
-            })
-        }
-        
-        # Log summary
-        logger.info(
-            f"Tagging completed: {len(tagged_resources)} succeeded, "
-            f"{len(failed_resources)} failed"
-        )
-        
-        if failed_resources:
-            logger.warning(f"Failed resources: {json.dumps(failed_resources)}")
-        
-        return response
         
     except Exception as e:
         logger.error(f"Unexpected error in lambda_handler: {str(e)}", exc_info=True)
@@ -118,6 +73,163 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 "error": str(e)
             })
         }
+
+
+def handle_s3_event(s3_event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle S3 event - Process CloudTrail logs from S3
+    
+    This mode allows ONE Lambda to handle ALL regions!
+    
+    Args:
+        s3_event: S3 event notification
+        
+    Returns:
+        Response with batch tagging results
+    """
+    processor = S3CloudTrailProcessor()
+    
+    # Extract CloudTrail events from S3 log files
+    cloudtrail_events = processor.process_s3_event(s3_event)
+    
+    if not cloudtrail_events:
+        logger.warning("No CloudTrail events extracted from S3")
+        return {
+            "statusCode": 200,
+            "body": json.dumps({
+                "message": "No relevant CloudTrail events found",
+                "events_processed": 0
+            })
+        }
+    
+    logger.info(f"Processing {len(cloudtrail_events)} CloudTrail events from S3")
+    
+    # Process each event
+    results = []
+    for cloudtrail_event in cloudtrail_events:
+        result = process_single_event(cloudtrail_event)
+        if result:
+            results.append(result)
+    
+    # Aggregate results
+    total_tagged = sum(r.get('tagged_count', 0) for r in results)
+    total_failed = sum(r.get('failed_count', 0) for r in results)
+    
+    return {
+        "statusCode": 200,
+        "body": json.dumps({
+            "message": "Batch tagging completed",
+            "mode": "s3-multi-region",
+            "events_processed": len(cloudtrail_events),
+            "total_tagged": total_tagged,
+            "total_failed": total_failed,
+            "results": results
+        })
+    }
+
+
+def handle_eventbridge_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle EventBridge event - Process single CloudTrail event
+    
+    This is the original regional mode
+    
+    Args:
+        event: EventBridge event
+        
+    Returns:
+        Response with tagging results
+    """
+    result = process_single_event(event)
+    
+    if not result:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({
+                "message": "Event not supported or could not be parsed",
+                "event": event
+            })
+        }
+    
+    return {
+        "statusCode": 200,
+        "body": json.dumps({
+            "message": "Resource tagging completed",
+            "mode": "eventbridge-regional",
+            **result
+        })
+    }
+
+
+def process_single_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process a single CloudTrail event
+    
+    Args:
+        event: EventBridge-formatted CloudTrail event
+        
+    Returns:
+        Tagging result dictionary or None if not processable
+    """
+    # Parse CloudTrail event
+    parsed_event = CloudTrailParser.parse_event(event)
+    
+    if not parsed_event:
+        logger.warning("Could not parse event or event not supported")
+        return None
+    
+    logger.info(f"Parsed event: {json.dumps(parsed_event)}")
+    
+    # Extract information
+    user_arn = parsed_event["user_arn"]
+    service = parsed_event["service"]
+    resource_type = parsed_event["resource_type"]
+    resource_ids = parsed_event["resource_ids"]
+    event_name = parsed_event["event_name"]
+    resource_region = parsed_event.get("region")  # Region where resource was created
+    
+    logger.info(
+        f"Processing {service} resource creation: "
+        f"user={user_arn}, event={event_name}, "
+        f"resource_type={resource_type}, resource_count={len(resource_ids)}, "
+        f"region={resource_region}"
+    )
+    
+    # Initialize tag manager with Lambda's region as default
+    lambda_region = os.environ.get("AWS_REGION", "us-east-1")
+    tag_manager = TagManager(region=lambda_region)
+    
+    # Tag resources (will use resource's region from CloudTrail)
+    tagged_resources, failed_resources = tag_manager.tag_resource(
+        service=service,
+        resource_type=resource_type,
+        resource_ids=resource_ids,
+        user_arn=user_arn,
+        region=resource_region,
+        additional_tags=_get_additional_tags(event)
+    )
+    
+    # Log summary
+    logger.info(
+        f"Tagging completed: {len(tagged_resources)} succeeded, "
+        f"{len(failed_resources)} failed"
+    )
+    
+    if failed_resources:
+        logger.warning(f"Failed resources: {json.dumps(failed_resources)}")
+    
+    return {
+        "event_name": event_name,
+        "service": service,
+        "resource_type": resource_type,
+        "resource_region": resource_region,
+        "tagged_count": len(tagged_resources),
+        "failed_count": len(failed_resources),
+        "tagged_resources": tagged_resources,
+        "failed_resources": failed_resources,
+        "user_arn": user_arn,
+        "timestamp": parsed_event.get("event_time")
+    }
 
 
 def _get_additional_tags(event: Dict[str, Any]) -> Dict[str, str]:
